@@ -1,0 +1,12 @@
+{
+    "capital_per_stock": 50,
+    "transaction_fee": 0.1425,
+    "transaction_discount": 20.0,
+    "trading_tax": 0.15,
+    "below_50": 500.0,
+    "price_gap_50_to_100": 1000.0,
+    "price_gap_100_to_500": 1000.0,
+    "price_gap_500_to_1000": 5000.0,
+    "price_gap_above_1000": 8000.0,
+    "allow_reentry_after_stop_loss": true
+}

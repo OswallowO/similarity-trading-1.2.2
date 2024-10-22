@@ -100,15 +100,18 @@ def calculate_5min_pct_increase_and_highest(intraday_df):
     :param intraday_df: 一分K線的DataFrame
     :return: 更新後的DataFrame
     """
+    # 確保數據按時間排序
     intraday_df = intraday_df.sort_values(by=['time']).reset_index(drop=True)
     intraday_df['5min_pct_increase'] = 0.0
     intraday_df['highest'] = 0.0  # 初始化 highest 欄位
-    
+
     existing_candles = []
     current_highest = 0.0  # 用於追踪當前的最高價
-    
+
     for idx, row in intraday_df.iterrows():
         candle = row.to_dict()
+        
+        # 計算5min_pct_increase
         calculated_candle = calculate_5min_pct_increase(candle, existing_candles)
         
         # 更新5min_pct_increase
@@ -120,7 +123,7 @@ def calculate_5min_pct_increase_and_highest(intraday_df):
         
         # 將計算後的candle加入existing_candles
         existing_candles.append(calculated_candle)
-    
+
     return intraday_df
 
 def load_all_kline_data():
@@ -1912,10 +1915,6 @@ def start_trading():
             initial_api_count = 0
         # 修改為 days=2
         daily_kline_df = fetch_daily_kline_data(client, symbol, days=2)
-        start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')  # 雖然 days=2, 但保留以便打印
-        end_date = datetime.now().strftime('%Y-%m-%d')
-        # 移除以下這行，避免重複輸出
-        # print(f"正在取得 {symbol} 從 {start_date} 到 {end_date} 的日K數據...")
         initial_api_count += 1
         if daily_kline_df.empty:
             print(f"無法取得 {symbol} 的日K數據，跳過。")
@@ -1942,10 +1941,6 @@ def start_trading():
                 initial_api_count = 0
             # 修改為 days=2
             daily_kline_df = fetch_daily_kline_data(client, symbol, days=2)
-            start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')  # 雖然 days=2, 但保留以便打印
-            end_date = datetime.now().strftime('%Y-%m-%d')
-            # 移除以下這行，避免重複輸出
-            # print(f"正在取得 {symbol} 從 {start_date} 到 {end_date} 的日K數據...")
             initial_api_count += 1
             if daily_kline_df.empty:
                 print(f"無法取得 {symbol} 的日K數據，跳過。")
@@ -1989,10 +1984,13 @@ def start_trading():
             sorted_daily_data = sorted(daily_data, key=lambda x: x['date'], reverse=True)
 
             # 獲取最新交易日的日期
-            latest_trading_day = sorted_daily_data[0]['date']
+            latest_trading_day_str = sorted_daily_data[0]['date']
+            latest_trading_day = datetime.strptime(latest_trading_day_str, '%Y-%m-%d')
+            expected_trading_day = datetime.strptime(trading_day, '%Y-%m-%d')
 
-            if latest_trading_day != trading_day:
-                print(f"警告：{symbol} 的最新交易日 {latest_trading_day} 與預期交易日 {trading_day} 不符。")
+            # 如果最新交易日與預期交易日相差超過一天，則發出警告
+            if (expected_trading_day - latest_trading_day).days > 1:
+                print(f"警告：{symbol} 的最新交易日 {latest_trading_day.strftime('%Y-%m-%d')} 與預期交易日 {trading_day} 不符。")
 
             # 獲取上一個交易日的收盤價
             if len(sorted_daily_data) > 1:
@@ -2008,11 +2006,22 @@ def start_trading():
     # 動態計算初始一分K線數據的結束時間
     current_time = datetime.now()
     market_end_time = current_time.replace(hour=13, minute=30, second=0, microsecond=0)
-    if current_time > market_end_time:
+
+    # 新增判斷是否在 00:00 ~ 08:30 之間
+    pre_market_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    pre_market_end = current_time.replace(hour=8, minute=30, second=0, microsecond=0)
+
+    if pre_market_start <= current_time < pre_market_end:
+        # 如果在 00:00 ~ 08:30 之間，設定交易日為前一日，並設定結束時間為前一日的收盤時間（假設為 13:30）
+        trading_day = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        initial_fetch_end_time_str = "13:30"
+        print(f"目前時間在 00:00 ~ 08:30，將取得前一日 {trading_day} 的一分K數據。")
+    elif current_time > market_end_time:
         initial_fetch_end_time = market_end_time
+        initial_fetch_end_time_str = initial_fetch_end_time.strftime('%H:%M')
     else:
         initial_fetch_end_time = (current_time - timedelta(minutes=1)).replace(second=0, microsecond=0)
-    initial_fetch_end_time_str = initial_fetch_end_time.strftime('%H:%M')
+        initial_fetch_end_time_str = initial_fetch_end_time.strftime('%H:%M')
 
     # 開始補齊一分K數據並計算「5min_pct_increase」
     auto_intraday_data = {}
@@ -2023,7 +2032,13 @@ def start_trading():
             time_module.sleep(60)
             initial_api_count = 0
         # 定義要獲取的時間範圍
-        print(f"正在取得 {symbol} 的一分K數據從 09:00 到 {initial_fetch_end_time_str}...")
+        if pre_market_start <= current_time < pre_market_end:
+            print(f"正在取得 {symbol} 的一分K數據從 09:00 到 {initial_fetch_end_time_str} (前一日)...")
+            trading_day_to_fetch = trading_day
+        else:
+            print(f"正在取得 {symbol} 的一分K數據從 09:00 到 {initial_fetch_end_time_str}...")
+            trading_day_to_fetch = trading_day  # 今日交易日
+
         yesterday_close = yesterday_close_prices.get(symbol, 0)
         if yesterday_close == 0:
             print(f"警告：{symbol} 的昨日收盤價為0，將跳過一分K數據的獲取。")
@@ -2031,7 +2046,7 @@ def start_trading():
         intraday_df = fetch_intraday_data(
             client=client,
             symbol=symbol,
-            trading_day=trading_day,
+            trading_day=trading_day_to_fetch,
             yesterday_close_price=yesterday_close,
             start_time="09:00",
             end_time=initial_fetch_end_time_str
@@ -2072,12 +2087,12 @@ def start_trading():
     current_time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
 
     # 定義時間段
-    pre_market_start = current_time.replace(hour=8, minute=30, second=0, microsecond=0)
-    pre_market_end = current_time.replace(hour=8, minute=59, second=59, microsecond=999999)
+    pre_market_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    pre_market_end = current_time.replace(hour=8, minute=30, second=0, microsecond=0)
     market_start = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
     market_end = current_time.replace(hour=13, minute=30, second=0, microsecond=0)
 
-    if pre_market_start <= current_time <= pre_market_end:
+    if pre_market_start <= current_time < pre_market_end:
         # 盤前處理
         print(f"目前為 {current_time_str}，盤前準備時間。")
         # （1）檢查 auto_daily 中（跳過或更新日K線數據）
@@ -2094,7 +2109,7 @@ def start_trading():
         print("輸入 'Q' 返回主選單：", end='', flush=True)
 
         # 初始化交易狀態變量
-        in_position = False
+        group_position = False  # 將 in_position 改名為 group_position
         has_exited = False
         current_position = None
         hold_time = 0
@@ -2130,7 +2145,14 @@ def start_trading():
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 print("\n" + "=" * 50)
                 print(f"\n{timestamp} 市場開盤中，取得 {fetch_time_str} 分的即時一分K數據。")
-                print(f"正在取得一分K數據從 09:00 到 {fetch_time_str}...")  # 修改後的輸出訊息
+                # 檢查是否是盤中或盤後
+                if market_start <= current_time <= market_end:
+                    # 盤中：動態輸出當前時間
+                    current_time_str = current_time.strftime('%H:%M')
+                    print(f"正在取得一分K數據從 {current_time_str} 到 {current_time_str}...")
+                else:
+                    # 盤後：固定輸出 09:00 到 13:30
+                    print("正在取得一分K數據從 09:00 到 13:30...")
 
                 # 處理所有股票的一分K數據
                 for symbol in symbols_to_analyze:  # 處理所有股票
@@ -2180,7 +2202,7 @@ def start_trading():
                     wait_minutes,
                     hold_minutes,
                     message_log,
-                    in_position,
+                    False,  # in_position 已由 group_position 管理
                     has_exited,
                     current_position,
                     hold_time,
@@ -2202,8 +2224,60 @@ def start_trading():
                 )
 
             else:
-                # 非盤中時間，判斷是否為盤後
-                if current_time > market_end:
+                # 非盤中時間，判斷是否為盤後或盤前
+                if pre_market_start <= current_time < pre_market_end:
+                    # 盤前處理，與盤後處理相同
+                    print(f"目前為 {current_time.strftime('%Y-%m-%d %H:%M:%S')}，盤前時間。")
+                    # 開始更新一分K數據，取得前一日的一分K數據
+                    print("開始更新前一日的一分K數據。")
+                    end_time_str = "13:30"  # 前一日的收盤時間
+                    for symbol in symbols_to_analyze:  # 處理所有股票
+                        yesterday_close = yesterday_close_prices.get(symbol, 0)
+                        if yesterday_close == 0:
+                            # 跳過昨日收盤價為0的股票
+                            continue  # 跳過這支股票，避免除零錯誤
+                        intraday_df = fetch_intraday_data(
+                            client=client,
+                            symbol=symbol,
+                            trading_day=trading_day,  # 前一日的交易日
+                            yesterday_close_price=yesterday_close,
+                            start_time="09:00",
+                            end_time=end_time_str
+                        )
+                        if intraday_df.empty:
+                            # 無法取得數據，跳過
+                            continue
+                        # 將 DataFrame 轉換為字典列表
+                        intraday_data = intraday_df.to_dict(orient='records')
+
+                        # 將 K線數據按時間排序（由早到晚）
+                        intraday_data_sorted = sorted(intraday_data, key=lambda x: x['time'])
+
+                        # 初始化該股票的 existing_candles 列表
+                        existing_candles = []
+
+                        # 計算每一筆 K線的「5min_pct_increase」
+                        calculated_candles = []
+                        for candle in intraday_data_sorted:
+                            calculated_candle = calculate_5min_pct_increase(candle, existing_candles)
+                            # 將「漲停價」無條件捨去到小數點後兩位
+                            if '漲停價' in calculated_candle:
+                                calculated_candle['漲停價'] = truncate_to_two_decimals(calculated_candle['漲停價'])
+                            calculated_candles.append(calculated_candle)
+                            existing_candles.append(calculated_candle)
+
+                        # 更新 auto_intraday_data
+                        auto_intraday_data[symbol] = calculated_candles
+                        update_intraday_json(symbol, calculated_candle)  # 更新每支股票後打印訊息
+
+                    print("一分K數據已成功處理並返回。")
+                    # 保存更新後的 auto_intraday.json
+                    save_auto_intraday_data(auto_intraday_data)
+                    print("已更新 auto_intraday.json。")
+
+                    # 輸出盤前訊息
+                    print(f"目前為 {current_time_str}，盤前時間。")
+                elif current_time > market_end:
                     # 盤後處理
                     print(f"目前為 {current_time.strftime('%Y-%m-%d %H:%M:%S')}，盤後時間。")
                     # （1）檢查 auto_daily 中（跳過或更新日K線數據）
@@ -2228,7 +2302,7 @@ def start_trading():
                         intraday_df = fetch_intraday_data(
                             client=client,
                             symbol=symbol,
-                            trading_day=trading_day,
+                            trading_day=trading_day,  # 前一日的交易日
                             yesterday_close_price=yesterday_close,
                             start_time="09:00",
                             end_time=end_time_str
@@ -2288,7 +2362,7 @@ def process_live_trading_logic(
     wait_minutes,
     hold_minutes,
     message_log,
-    in_position,
+    in_position,  # 這裡的 in_position 代表個別持倉狀態
     has_exited,
     current_position,
     hold_time,
@@ -2330,6 +2404,9 @@ def process_live_trading_logic(
         else:
             stock_data_collection[symbol] = pd.DataFrame()
 
+    # 收集符合進場條件的股票
+    eligible_stocks_for_entry = []
+
     # 遍歷所有股票
     for symbol in symbols_to_analyze:
         # 獲取股票所屬的族群
@@ -2342,7 +2419,7 @@ def process_live_trading_logic(
             continue  # 如果找不到所屬族群，跳過該股票
 
         # 第一步：檢查該族群的持倉狀態
-        if group_positions[stock_group]:
+        if group_positions.get(stock_group, False):
             # 該族群已經持倉，跳過該股票的後續檢查
             continue
 
@@ -2382,13 +2459,44 @@ def process_live_trading_logic(
             triggered_pull_up = True
             print(f"{symbol} 已觸發拉高進場條件，開始檢查")
 
-        # 如果兩個條件都滿足，以漲停條件為優先
-        if triggered_limit_up:
-            print(f"已觸發漲停進場條件：{symbol}")
-            # 在此處可以添加進場的訊息或紀錄
-        elif triggered_pull_up:
-            print(f"已觸發拉高進場條件：{symbol}")
-            # 在此處可以添加進場的訊息或紀錄
+        # 收集符合進場條件的股票
+        if triggered_limit_up or triggered_pull_up:
+            eligible_stocks_for_entry.append({
+                'symbol': symbol,
+                'rise': five_min_increase
+            })
+
+    # 呼叫 entry_trade 函數進行進場操作
+    if eligible_stocks_for_entry:
+        entry_trade(
+            eligible_stocks=eligible_stocks_for_entry,
+            current_time=current_time,
+            current_time_str=current_time_str,
+            stock_data_collection=stock_data_collection,
+            idx=0,  # idx 可以根據需求調整
+            message_log=message_log,
+            already_entered_stocks=already_entered_stocks,
+            tracking_stocks=tracking_stocks,
+            previous_rise_values=previous_rise_values,
+            verbose=True
+        )
+        # 更新 group_positions 根據進場的股票
+        for stock in eligible_stocks_for_entry:
+            symbol = stock['symbol']
+            # 獲取該股票的族群
+            stock_group = None
+            for group, symbols in group_symbols.items():
+                if symbol in symbols:
+                    stock_group = group
+                    break
+            if stock_group:
+                group_positions[stock_group] = True
+    else:
+        if len(eligible_stocks_for_entry) == 0:
+            if not in_position:
+                message_log.append(
+                    (current_time_str, f"{YELLOW}沒有符合進場條件的股票{RESET}")
+                )
 
     # 打印交易訊息
     for log_time, message in message_log:
@@ -2588,17 +2696,27 @@ def fill_missing_intraday_data(intraday_df, start_time, end_time):
     intraday_df.set_index(['date', 'time'], inplace=True)
     intraday_df = intraday_df.reindex(full_index)
     
+    # 填補 symbol、昨日收盤價、漲停價
     intraday_df[['symbol', '昨日收盤價', '漲停價']] = intraday_df[['symbol', '昨日收盤價', '漲停價']].ffill().bfill()
+    
+    # 填補 close
     intraday_df['close'] = intraday_df['close'].ffill()
     intraday_df['close'] = intraday_df['close'].fillna(intraday_df['昨日收盤價'])
-    intraday_df['open'] = intraday_df['open'].ffill()
-    intraday_df['open'] = intraday_df['open'].fillna(intraday_df['close'])
-    intraday_df['high'] = intraday_df['high'].ffill()
-    intraday_df['high'] = intraday_df['high'].fillna(intraday_df['close'])
-    intraday_df['low'] = intraday_df['low'].ffill()
-    intraday_df['low'] = intraday_df['low'].fillna(intraday_df['close'])
+    
+    # 使用 close 的前一個值來填補 open, high, low
+    intraday_df['open'] = intraday_df['close'].shift()
+    intraday_df['high'] = intraday_df['close'].shift()
+    intraday_df['low'] = intraday_df['close'].shift()
+    
+    # 如果移位後仍有缺失（如在 9:00 時），使用昨日收盤價填補
+    intraday_df['open'] = intraday_df['open'].fillna(intraday_df['昨日收盤價'])
+    intraday_df['high'] = intraday_df['high'].fillna(intraday_df['昨日收盤價'])
+    intraday_df['low'] = intraday_df['low'].fillna(intraday_df['昨日收盤價'])
+    
+    # 填補 volume
     intraday_df['volume'] = intraday_df['volume'].fillna(0)
     
+    # 填補 5min_pct_increase
     if '5min_pct_increase' not in intraday_df.columns:
         intraday_df['5min_pct_increase'] = 0.0
     else:
@@ -2606,6 +2724,7 @@ def fill_missing_intraday_data(intraday_df, start_time, end_time):
     
     intraday_df.reset_index(inplace=True)
     
+    # 計算 rise
     intraday_df['rise'] = (intraday_df['close'] - intraday_df['昨日收盤價']) / intraday_df['昨日收盤價'] * 100
     intraday_df = calculate_5min_pct_increase_and_highest(intraday_df)
     intraday_df['highest'] = intraday_df['highest'].ffill().bfill()
